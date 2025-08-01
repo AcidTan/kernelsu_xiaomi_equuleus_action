@@ -37,7 +37,7 @@ jobs:
           until [ $retry_count -ge $max_retries ]
           do
             git clone https://github.com/CZB666-wdnmd/android_kernel_xiaomi_sdm845.git \
-            -b udc --depth=1 /home/runner/kernel_sdm845 && break
+            -b thunder-kernelsu --depth=1 /home/runner/kernel_sdm845 && break
             retry_count=$((retry_count+1))
             echo "克隆失败，重试中 ($retry_count/$max_retries)..."
             sleep 10
