@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps: 
-       - uses: actions/checkout@v1
+       - uses: actions/checkout@v4
         
        - name: Set swap to 10G
          uses: pierotofy/set-swap-space@master
@@ -65,7 +65,7 @@ jobs:
            
        - name: Upload boot.img
          if: success()
-         uses: actions/upload-artifact@v3
+         uses: actions/upload-artifact@v4
          with:
            name: ksu-boot.img
            path: "/home/runner/bootedit/img/ksu-boot.img"
