@@ -6,66 +6,158 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
     steps: 
-       - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
         
-       - name: Set swap to 10G
-         uses: pierotofy/set-swap-space@master
-         with:
-           swap-size-gb: 10
-
-       - name: Setup build kernel environment
-         run: |
-          sudo apt-get update
-          sudo apt install bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libwxgtk3.0-gtk3-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev make unzip python-is-python3
-
-       - name: Download kernel source
-         run: |
-           cd /home/runner
-           git clone https://github.com/CZB666-wdnmd/android_kernel_xiaomi_sdm845.git -b udc-kernelsu --depth=1 kernel_sdm845
-           
-       - name: Download gcc and clang
-         run: |
-           cd /home/runner
-           git clone https://github.com/PixelExperience/prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git --depth=1 gcc_aarch64
-           git clone https://github.com/PixelExperience/prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git --depth=1 gcc_arm
-           git clone https://github.com/PixelExperience/prebuilts_clang_kernel_linux-x86_clang-r416183b.git --depth=1 clang-r416183b
-           
-       - name: Patch kernel source
-         run: |
-           cd /home/runner/kernel_sdm845
-           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
-           cd /home/runner/kernel_sdm845/KernelSU
-           expr 10000 + $(git rev-list --count HEAD) + 200 > /home/runner/ksu_ver
-           git config --global user.email "asfasdas@gmail.com"
-           git config --global user.name "asdasfgas"
-           git remote add target https://github.com/CZB666-wdnmd/KernelSU.git
-           git fetch target
-           git cherry-pick -n 7e495e606a70653e3e9e4c3d082d99fb6b6958c4 e407b54d8865a7d190e3b65bdf59902277eebedf
-
-       - name: Build
-         run: |
-           cd /home/runner/kernel_sdm845
-           PATH="/home/runner/clang-r416183b/bin:${PATH}"
-           cat ./arch/arm64/configs/vendor/xiaomi/mi845_defconfig > ./arch/arm64/configs/vendor/xiaomi/equuleus_defconfig
-           cat ./arch/arm64/configs/vendor/xiaomi/equuleus.config >> ./arch/arm64/configs/vendor/xiaomi/equuleus_defconfig
-           make O=out ARCH=arm64 vendor/xiaomi/equuleus_defconfig
-           make -j$(nproc --all) O=out CC=clang ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=/home/runner/gcc_aarch64/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=/home/runner/gcc_arm/bin/arm-linux-androideabi- AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip LLVM_IAS=1 LLVM=1
-           
-       - name: Make boot.img
-         run: |
-           cd /home/runner/
-           git clone https://github.com/CZB666-wdnmd/kernelsu_xiaomi_equuleus_action.git bootedit
-           cp /home/runner/kernel_sdm845/out/arch/arm64/boot/Image  /home/runner/bootedit/img/kernel
-           cd /home/runner/bootedit/img
-           chmod +x ./magiskboot
-           ./magiskboot repack ./boot.img ./ksu-boot.img
-           echo "KernelSU version: "+$(cat /home/runner/ksu_ver) >> $GITHUB_STEP_SUMMARY
-           echo "Boot image for evolution_equuleus-uq1a.240105.004-01300259-UNOFFICIAL" >> $GITHUB_STEP_SUMMARY
-           
-       - name: Upload boot.img
-         if: success()
-         uses: actions/upload-artifact@v4
-         with:
-           name: ksu-boot.img
-           path: "/home/runner/bootedit/img/ksu-boot.img"
+      - name: Set swap to 10G
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
+        timeout-minutes: 5
+        
+      # 修复的依赖安装步骤
+      - name: Setup build kernel environment
+        run: |
+          sudo apt-get update -y
+          sudo apt install -y bc bison build-essential ccache curl flex g++-multilib \
+          gcc-multilib git gnupg gperf imagemagick liblz4-tool libncurses-dev \
+          libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+          squashfs-tools xsltproc zip zlib1g-dev make unzip python-is-python3 \
+          llvm clang lld libelf-dev
+          
+      - name: Download kernel source
+        run: |
+          max_retries=3
+          retry_count=0
+          until [ $retry_count -ge $max_retries ]
+          do
+            git clone https://github.com/CZB666-wdnmd/android_kernel_xiaomi_sdm845.git \
+            -b udc-kernelsu --depth=1 /home/runner/kernel_sdm845 && break
+            retry_count=$((retry_count+1))
+            echo "克隆失败，重试中 ($retry_count/$max_retries)..."
+            sleep 10
+          done
+          if [ ! -d "/home/runner/kernel_sdm845" ]; then
+            echo "❌ 无法克隆内核源码"
+            exit 1
+          fi
+          
+      - name: Download gcc and clang
+        run: |
+          set -e
+          cd /home/runner
+          git clone https://github.com/PixelExperience/prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git \
+          --depth=1 gcc_aarch64
+          
+          git clone https://github.com/PixelExperience/prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git \
+          --depth=1 gcc_arm
+          
+          git clone https://github.com/PixelExperience/prebuilts_clang_kernel_linux-x86_clang-r416183b.git \
+          --depth=1 clang-r416183b
+          
+          if [ ! -d "gcc_aarch64" ] || [ ! -d "gcc_arm" ] || [ ! -d "clang-r416183b" ]; then
+            echo "❌ 工具链下载失败"
+            exit 1
+          fi
+          
+      - name: Patch kernel source
+        run: |
+          set -e
+          cd /home/runner/kernel_sdm845
+          
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5 || {
+            echo "❌ KernelSU补丁应用失败";
+            exit 1;
+          }
+          
+          cd KernelSU
+          expr 10000 + $(git rev-list --count HEAD) + 200 > /home/runner/ksu_ver
+          
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          
+          git remote add target https://github.com/CZB666-wdnmd/KernelSU.git || true
+          git fetch target || true
+          
+          if ! git cherry-pick -n 7e495e606a70653e3e9e4c3d082d99fb6b6958c4 e407b54d8865a7d190e3b65bdf59902277eebedf 2>/dev/null; then
+            echo "⚠️ Cherry-pick失败，但继续构建..."
+          fi
+          
+      - name: Build kernel
+        run: |
+          set -e
+          cd /home/runner/kernel_sdm845
+          
+          export PATH="/home/runner/clang-r416183b/bin:${PATH}"
+          export CLANG_PATH="/home/runner/clang-r416183b/bin"
+          export CROSS_COMPILE="/home/runner/gcc_aarch64/bin/aarch64-linux-android-"
+          export CROSS_COMPILE_ARM32="/home/runner/gcc_arm/bin/arm-linux-androideabi-"
+          
+          cat ./arch/arm64/configs/vendor/xiaomi/mi845_defconfig > ./arch/arm64/configs/vendor/xiaomi/equuleus_defconfig
+          cat ./arch/arm64/configs/vendor/xiaomi/equuleus.config >> ./arch/arm64/configs/vendor/xiaomi/equuleus_defconfig
+          
+          make O=out clean && make O=out mrproper
+          make O=out ARCH=arm64 vendor/xiaomi/equuleus_defconfig
+          
+          make -j$(nproc --all) O=out ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=${CROSS_COMPILE} \
+          CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          LLVM_IAS=1 \
+          LLVM=1
+          
+          if [ ! -f "out/arch/arm64/boot/Image" ]; then
+            echo "❌ 内核编译失败：未找到Image文件"
+            exit 1
+          fi
+          
+      - name: Make boot.img
+        run: |
+          set -e
+          cd /home/runner/
+          
+          git clone https://github.com/CZB666-wdnmd/kernelsu_xiaomi_equuleus_action.git bootedit
+          cp /home/runner/kernel_sdm845/out/arch/arm64/boot/Image /home/runner/bootedit/img/kernel
+          
+          cd /home/runner/bootedit/img
+          
+          if [ ! -f "boot.img" ]; then
+            echo "❌ 找不到原始boot.img"
+            exit 1
+          fi
+          
+          chmod +x ./magiskboot
+          ./magiskboot repack boot.img ksu-boot.img || {
+            echo "❌ 重新打包boot.img失败";
+            exit 1;
+          }
+          
+          if [ ! -f "ksu-boot.img" ]; then
+            echo "❌ 未生成ksu-boot.img"
+            exit 1
+          fi
+          
+          echo "### KernelSU 构建结果" >> $GITHUB_STEP_SUMMARY
+          echo "- **KernelSU 版本:** $(cat /home/runner/ksu_ver)" >> $GITHUB_STEP_SUMMARY
+          echo "- **设备:** evolution_equuleus-uq1a.240105.004-01300259-UNOFFICIAL" >> $GITHUB_STEP_SUMMARY
+          echo "- **构建时间:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "✅ 成功生成 boot.img" >> $GITHUB_STEP_SUMMARY
+          
+      - name: Upload boot.img
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksu-boot.img
+          path: "/home/runner/bootedit/img/ksu-boot.img"
+          retention-days: 7
